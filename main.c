@@ -9,6 +9,8 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include "SDMMobileDevice.h"
 
+// sudo hdiutil create -format UDZO -layout NONE -srcfolder h4xmb h4xmb.dmg
+
 SDMMD_AMDeviceRef GetConnectedDevice() {
 	SDMMD_AMDeviceRef device;
 	
