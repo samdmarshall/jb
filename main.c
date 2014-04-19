@@ -181,6 +181,9 @@ Retry:
 			
 		}
 	}
+	else {
+		printf("./jb developerdiskimage.dmg developerdiskimage.dmg.signature h4xmb.dmg\n");
+	}
 	
 	ExitLabelAndReturn(result);
 }
