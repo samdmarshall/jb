@@ -9,8 +9,6 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include "SDMMobileDevice.h"
 
-// sudo hdiutil create -format UDZO -layout NONE -srcfolder h4xmb h4xmb.dmg
-
 SDMMD_AMDeviceRef GetConnectedDevice() {
 	SDMMD_AMDeviceRef device;
 	
@@ -30,12 +28,35 @@ SDMMD_AMDeviceRef GetConnectedDevice() {
 
 static char *real_dmg, *real_dmg_signature, *ddi_dmg;
 
+struct copy_to_paths {
+	CFStringRef path_ref;
+	char *path;
+} ATR_PACK;
+
+static struct copy_to_paths *use_paths;
+
+#define ddi_real_5 "real.dmg"
+#define ddi_fake_5 "ddi.dmg"
+
+static struct copy_to_paths ddi_paths_5[2] = {
+	{ CFSTR(ddi_real_5), ddi_real_5},
+	{ CFSTR(ddi_fake_5), ddi_fake_5}
+};
+
+#define ddi_real_6 "PublicStaging/staging.dimage"
+#define ddi_fake_6 "PublicStaging/ddi.dimage"
+
+static struct copy_to_paths ddi_paths_6[2] = {
+	{ CFSTR(ddi_real_6), ddi_real_6},
+	{ CFSTR(ddi_fake_6), ddi_fake_6}
+};
+
 int main(int argc, const char * argv[]) {
 	sdmmd_return_t result = 0;
 	if (argc == 4) {
-		real_dmg = argv[1];
-		real_dmg_signature = argv[2];
-		ddi_dmg = argv[3];
+		real_dmg = (char *)argv[1];
+		real_dmg_signature = (char *)argv[2];
+		ddi_dmg = (char *)argv[3];
 		
 		useconds_t sleep_time = 10000;
 		uint32_t retry = 0;
@@ -56,10 +77,7 @@ int main(int argc, const char * argv[]) {
 			result = SDMMD_AMDeviceStartSession(dev);
 			CheckErrorAndReturn(result);
 			
-			CFTypeRef version = SDMMD_AMDeviceCopyValue(dev, NULL, CFSTR(kProductVersion));
-
-Retry:
-			printf("");
+		Retry: {}
 			SDMMD_AMConnectionRef conn = NULL;
 			result = SDMMD_AMDeviceStartService(dev, CFSTR(AMSVC_AFC), NULL, &conn);
 			CheckErrorAndReturn(result);
@@ -69,56 +87,41 @@ Retry:
 			result = SDMMD_AFCProcessOperation(afc, &make_dir);
 			CheckErrorAndReturn(result);
 			
-			bool not_6 = (CFStringCompare(version, CFSTR("6.0"), kCFCompareNumerically) == kCFCompareLessThan ? true : false);
+			bool is_6 = SDMMD_device_os_is_at_least(dev, CFSTR("6.0"));
 			
+			use_paths = (is_6 ? ddi_paths_6 : ddi_paths_5);
+			
+			SDMMD_AFCOperationRef remove_real = SDMMD_AFCOperationCreateRemovePath(use_paths[0].path_ref);
+			result = SDMMD_AFCProcessOperation(afc, &remove_real);
+			CheckErrorAndReturn(result);
+			
+			SDMMD_AFCOperationRef remove_ddi = SDMMD_AFCOperationCreateRemovePath(use_paths[1].path_ref);
+			result = SDMMD_AFCProcessOperation(afc, &remove_ddi);
+			CheckErrorAndReturn(result);
+			
+			printf("%s -> %s\n",real_dmg,use_paths[0].path);
+			result = SDMMD_AMDeviceCopyFile(NULL, NULL, NULL, afc, real_dmg, use_paths[0].path);
+			CheckErrorAndReturn(result);
+			printf("%s -> %s\n",ddi_dmg,use_paths[1].path);
+			result = SDMMD_AMDeviceCopyFile(NULL, NULL, NULL, afc, ddi_dmg, use_paths[1].path);
+			CheckErrorAndReturn(result);
+			
+			SDMMD_AMConnectionRef image2 = NULL;
 			SDMMD_AMConnectionRef image1 = NULL;
 			result = SDMMD_AMDeviceStartService(dev, CFSTR(AMSVC_MOBILE_IMAGE_MOUNT), NULL, &image1);
 			CheckErrorAndReturn(result);
-			
-			if (not_6) {
-				SDMMD_AFCOperationRef remove_real = SDMMD_AFCOperationCreateRemovePath(CFSTR("real.dmg"));
-				result = SDMMD_AFCProcessOperation(afc, &remove_real);
-				CheckErrorAndReturn(result);
-			
-				SDMMD_AFCOperationRef remove_ddi = SDMMD_AFCOperationCreateRemovePath(CFSTR("ddi.dmg"));
-				result = SDMMD_AFCProcessOperation(afc, &remove_ddi);
-				CheckErrorAndReturn(result);
-				
-				printf("%s -> real.dmg\n",real_dmg);
-				result = SDMMD_AMDeviceCopyFile(NULL, NULL, NULL, afc, real_dmg, "real.dmg");
-				printf("%s -> ddi.dmg\n",ddi_dmg);
-				result = SDMMD_AMDeviceCopyFile(NULL, NULL, NULL, afc, ddi_dmg, "ddi.dmg");
-			}
-			else {
-				SDMMD_AFCOperationRef remove_real = SDMMD_AFCOperationCreateRemovePath(CFSTR("PublicStaging/staging.dimage"));
-				result = SDMMD_AFCProcessOperation(afc, &remove_real);
-				CheckErrorAndReturn(result);
-		
-				SDMMD_AFCOperationRef remove_ddi = SDMMD_AFCOperationCreateRemovePath(CFSTR("PublicStaging/ddi.dimage"));
-				result = SDMMD_AFCProcessOperation(afc, &remove_ddi);
-				CheckErrorAndReturn(result);
-				
-				printf("%s -> staging.dimage\n",real_dmg);		
-				result = SDMMD_AMDeviceCopyFile(NULL, NULL, NULL, afc, real_dmg, "PublicStaging/staging.dimage");
-				
-				printf("%s -> ddi.dimage\n",ddi_dmg);
-				result = SDMMD_AMDeviceCopyFile(NULL, NULL, NULL, afc, ddi_dmg, "PublicStaging/ddi.dimage");
-			}
-			SDMMD_AMConnectionRef image2 = NULL;
 			
 			CFMutableDictionaryRef message = SDMMD_create_dict();
 			CFDictionarySetValue(message, CFSTR("Command"), CFSTR("MountImage"));
 			CFDictionarySetValue(message, CFSTR("ImageType"), CFSTR("Developer"));
 			
-						
-			if (not_6) {
+			if (!is_6) {
 				result = SDMMD_AMDeviceStartService(dev, CFSTR(AMSVC_MOBILE_IMAGE_MOUNT), NULL, &image2);
 				CheckErrorAndReturn(result);
-				CFDictionarySetValue(message, CFSTR("ImagePath"), CFSTR("/var/mobile/Media/real.dmg"));
 			}
-			else {
-				CFDictionarySetValue(message, CFSTR("ImagePath"), CFSTR("/var/mobile/Media/PublicStaging/staging.dimage"));
-			}
+			
+			CFStringRef real_path_set = CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("/var/mobile/Media/%@"), use_paths[0].path_ref);
+			CFDictionarySetValue(message, CFSTR("ImagePath"), real_path_set);
 			
 			CFDataRef sig_data = CFDataCreateFromFilePath(real_dmg_signature);
 			
@@ -128,7 +131,7 @@ Retry:
 			
 			usleep(sleep_time);
 			
-			if (not_6) {
+			if (!is_6) {
 				CFDictionarySetValue(message, CFSTR("ImagePath"), CFSTR("/var/mobile/Media/ddi.dmg"));
 				result = SDMMD_ServiceSendMessage(SDMMD_TranslateConnectionToSocket(image2), message, kCFPropertyListXMLFormat_v1_0);
 				CheckErrorAndReturn(result);
@@ -143,7 +146,7 @@ Retry:
 				}
 			}
 			else {
-				SDMMD_AFCOperationRef new_path = SDMMD_AFCOperationCreateRenamePath(CFSTR("PublicStaging/ddi.dimage"), CFSTR("PublicStaging/staging.dimage"));
+				SDMMD_AFCOperationRef new_path = SDMMD_AFCOperationCreateRenamePath(use_paths[1].path_ref, use_paths[0].path_ref);
 				result = SDMMD_AFCProcessOperation(afc, &new_path);
 				CheckErrorAndReturn(result);
 				
@@ -182,9 +185,6 @@ Retry:
 			SDMMD_AMDeviceDisconnect(dev);
 			
 		}
-	}
-	else {
-		printf("./jb developerdiskimage.dmg developerdiskimage.dmg.signature h4xmb.dmg\n");
 	}
 	
 	ExitLabelAndReturn(result);
